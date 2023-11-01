@@ -1,0 +1,1238 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>replit</title>
+</head>
+
+<body>
+<canvas id="myCanvas" width="500" height="500" style="border:1px solid #000000;"></canvas>
+
+<script>
+  "use strict";
+  var canvas = document.getElementById("myCanvas");
+  var can = canvas.getContext("2d");
+  var bounding = canvas.getBoundingClientRect();
+  let cw = canvas.width; let ch = canvas.height;
+
+  let CurMode = 0;
+  let cc = new Option().style;
+  cc.color = 'Grey';
+  let Grid = true;
+  let Edit = true;
+  let Debug = true;
+
+  //SHIFT TREE UP A LAYER
+  /*
+  a[0].forEach((kid) => {
+      b = p.qt.Decode(kid)
+      c = p.qt.Encode([b[0]-1,b[1]+2**(b[0]-2),b[2]+2**(b[0]-2)])
+      p.qt.Populate('blue',c)
+  })*/
+
+  //Math functions
+  function spinPoint(x, y, originx, originy, r) {
+      let sin = Math.sin(r * Math.PI);
+      let cos = Math.cos(r * Math.PI);
+      let newx = (x - originx) * cos - (y - originy) * sin;
+      let newy = (y - originy) * cos + (x - originx) * sin;
+    return [newx, newy]
+  }
+
+  function cross(point, force) {
+    return Number(((point[0]*force[1]*1000 - point[1]*force[0]*1000)/1000).toFixed(3));
+  }
+
+  function vectorForce(force, direction) {  
+    let sin = Math.sin(direction*Math.PI).toFixed(3);
+    let cos = Math.cos(direction*Math.PI).toFixed(3);
+    let xforce = force*cos;
+    let yforce = force*sin;
+    return [xforce, yforce]
+  }
+
+  //TODO:
+  //Implement collision solving
+  //Fix Editor rotation offset
+  //Add function for shifting quadtree data and implement to center objects
+  class Quadtree {
+    constructor(maxlayers) {
+      if (maxlayers > 15) {maxlayers = 15;}
+      this.maxlayers = maxlayers;
+      this.map = new Map();
+      this.corners = new Map();
+      for (let i = 0; i <= this.maxlayers; i++) {this.map.set(i, new Map());}
+      for (let i = 0; i < 4; i++) {this.corners.set(i, new Set());}
+      //Organization
+      //Map0 stores meta data maybe(?), Map1 to MapN store block data
+      //Map1  |  1  xy  xy  xy  xy  xy..  | MapN
+      //Map1  |  1  10  01  11  11  00..  | MapN
+      //Neigbors stores all possible neigbor states, each containing a list of keys matching that state.
+      //  1   2
+      //    B  
+      //  8   4
+    }
+
+    //Increase maximum depth of map (decreasing currently not supported)
+    changeMaxDepth(newDepth) {
+      if (newDepth > 15) {newDepth = 15;}
+      else if (newDepth < 0) {newDepth = 0;}
+      if (newDepth > this.maxlayers) {
+        for (let i = this.maxlayers+1; i <= newDepth; i++) {
+          this.map.set(i, new Map());
+        }
+        this.maxlayers = newDepth;
+      }
+    }
+
+    getExposedCorners(Key) {
+      let Coords = this.Decode(Key);
+      let up; let right; let down; let left;
+      let breakout;
+      let Layer = Coords[0];
+      if (typeof(this.map.get(Layer).get(Key)) == 'number') {throw "Invalid object; getExposedCorners"}
+      if (true) {
+        try {
+          up = this.Encode([Coords[0], Coords[1], Coords[2] - 1])
+        }  catch(err) { up = -1}
+        try {
+          right = this.Encode([Coords[0], Coords[1] + 1, Coords[2]]) 
+        }  catch(err) { right = -1}
+        try {
+          down = this.Encode([Coords[0], Coords[1], Coords[2] + 1]) 
+        }  catch(err) { down = -1}
+        try {
+          left = this.Encode([Coords[0], Coords[1] - 1, Coords[2]])
+        }  catch(err) { left = -1}
+      }
+      let directions = [
+        [up, this.map.get(Layer).get(up)], 
+        [right, this.map.get(Layer).get(right)], 
+        [down, this.map.get(Layer).get(down)], 
+        [left, this.map.get(Layer).get(left)]
+      ];
+      let sides = [];
+      for (let i = 0; i < 4; i++) {
+        let address = directions[i][0];
+        let value = directions[i][1];
+        if (address != -1) {
+          if (value == undefined) {
+            breakout = false;
+            let newkey = address >> 2;
+            let ogkey = Key >> 2;
+            let newlayer = Layer - 1;
+            while (!breakout && newkey != ogkey) {
+              let newval = this.map.get(newlayer).get(newkey);
+              if (typeof(newval) == 'string') {
+                sides[i*2] = newval;
+                sides[i*2+1] = newval;
+                breakout = true;
+              }
+              else if (newval == undefined) {
+                newkey >>= 2;
+                ogkey >>= 2;
+                newlayer -= 1;
+              }
+              else if (typeof(newval) == 'number') {
+                sides[i*2] = undefined;
+                sides[i*2+1] = undefined;
+                breakout = true;
+              }
+            }
+            if (newkey == ogkey) {
+              sides[i*2] = undefined;
+              sides[i*2+1] = undefined;
+            }
+          }      
+          else if (typeof(value) == 'number') {
+            let parents = [address, address];
+            let endpoints = [];
+            breakout = false;
+            let modifier;
+            switch (i) {
+              case 0: modifier = [1,3]; break;
+              case 1: modifier = [0,1]; break;
+              case 2: modifier = [2,0]; break;
+              case 3: modifier = [3,2]; break;  
+            }
+            let stop = 0;
+            while (stop < 3) {
+              for (let j = 0; j < 2; j++) {
+                if (stop != 2**j) { 
+                  let newlayer = this.getLayer(parents[j]);
+                  let avaliablepoints = new Set(this.decodePointer(this.map.get(newlayer).get(parents[j])));
+                  if (avaliablepoints.has(modifier[j])) {
+                    let newkey = (parents[j] << 2) + modifier[j];
+                    let newvalue = this.map.get(newlayer + 1).get(newkey);
+                    if (typeof(newvalue) == 'number') {parents[j] = newkey}
+                    else if (typeof(newvalue) == 'string') {
+                      sides[i*2+j] = newvalue;
+                      if (stop != 0) {stop = 3}
+                      else {stop = 2**j}
+                    }
+                  }
+                  else {
+                    sides[i*2+j] = undefined;
+                    if (stop != 0) {stop = 3}
+                    else {stop = 2**j}
+                  }
+                }
+              }
+            }
+          }          
+          else if (typeof(value) == 'string') {
+            sides[i*2] = value;
+            sides[i*2+1] = value;
+          }
+        }
+        else {
+          sides[i*2] = undefined;
+          sides[i*2+1] = undefined;
+        }
+      }
+      let marched = 0;
+      //console.log(sides);
+      if (sides[0] == undefined && sides[7] == undefined) {marched += 1}
+      if (sides[1] == undefined && sides[2] == undefined) {marched += 2}
+      if (sides[3] == undefined && sides[4] == undefined) {marched += 4}
+      if (sides[5] == undefined && sides[6] == undefined) {marched += 8}
+      return marched
+    }
+
+    //Update this.neighbors map
+    updateCorners() {
+      this.corners.get(0).clear();
+      this.corners.get(1).clear();
+      this.corners.get(2).clear();
+      this.corners.get(3).clear();
+      if (typeof(this.map.get(0).get(1)) != 'number') {
+      this.corners.get(0).add(1);
+      this.corners.get(1).add(1);
+      this.corners.get(2).add(1);
+      this.corners.get(3).add(1);
+      return
+    }
+      let blocks = this.getKids();
+      blocks[0].forEach((kid) => {
+        let options = this.decodePointer(this.getExposedCorners(kid));
+        options.forEach((option) => {
+          this.corners.get(option).add(kid);
+        })
+      })
+    }
+
+    //Decode Key into Layer, X, and Y
+    Decode(Key, Centered) {
+      if (Centered != false) {Centered = true}
+      //Determine layers into the tree
+      let Layer = this.getLayer(Key);
+      //Terminate if Layer is invalid
+      if (Layer === false) {return false  }
+      //If Layer isn't 0
+      if (Layer !== 0) {
+        //Convert input to binary
+        let str = Key.toString(2);
+        //Initialize strings
+        let xstr = "";  let ystr = "";  
+        //Isolate x and y instructions (1  xy  xy  xy  xy.. -> xxxx yyyy)
+        for (let i = 0; i <= Layer; i++) {xstr += str[i*2+1];  ystr += str[i*2+2];  }  
+        //Convert output to decimal
+        let x = parseInt(xstr, 2);  let y = parseInt(ystr, 2);
+        //Return decoded coords [Layer, X, Y]
+        if (Centered) {x -= 2**(Layer-1); y -= 2**(Layer-1);}
+        return [Layer, x, y]  
+      } 
+      //If Layer is 0, return chunk rep 
+      else {return [0, -.5, -.5]  }  
+    }
+
+    //Encode Layer, X, and Y into Key;  CoordArr Format: [Layer, X, Y]
+    Encode(CoordArr) {
+      if (typeof(CoordArr) != "object") {throw 'Invalid Array; Encode'}
+      let Layer = CoordArr[0];  let x = CoordArr[1];  let y = CoordArr[2];
+      if (x < (2**Layer)/-2 || y < (2**Layer)/-2 || x > (2**Layer)/2-1 || y > (2**Layer)/2-1) {
+        throw 'Out of coordinate range; Encode'  }
+      x += 2**(Layer-1); y += 2**(Layer-1);
+      let output = 1;
+      //Convert input coords to binary strings
+      let xstr = x.toString(2);  let ystr = y.toString(2);
+      let xlen = xstr.length;  let ylen = ystr.length;
+      let dif = xlen - ylen;
+      if (dif > 0) {
+        //If Y is shorter, make Y longer
+        for (dif; dif != 0; dif--) {
+          ystr = '0' + ystr;
+        }
+      }
+      else if (dif < 0) {
+        //If X is shorter, make X longer
+        for (dif; dif != 0; dif++) {
+          xstr = '0' + xstr;
+        }
+        xlen = xstr.length;
+      }
+      if (xlen > Layer) {  
+        //Identify how much longer
+        let cut = xlen-Layer;
+        //Trim strings and update lengths
+        xstr = xstr.slice(0, xlen-cut);  ystr = ystr.slice(0, xlen-cut);
+        xlen = xstr.length; 
+      }
+      //If length shorter than layer requires
+      else if (xlen < Layer) {
+        //Identify how much shorter
+        let cut = Layer-xlen;
+        //Add 0's to binary start until length matches
+        for (let i = 0; i < cut*2; i++) {output += "0";  }  
+      }
+      //Merge x and y binaries
+      for (let i = 0; i < xlen; i++) {output += xstr[i] + ystr[i];  }
+      //Return encoded key
+      //console.log(output + ' Key Encoded');
+      return parseInt(output,2);  
+    }
+
+    //Get descendants from encoded reference
+    decodePointer(enList) {
+      let addresses = []
+      if (enList >= 8) {enList -= 8; addresses.push(3);}
+      if (enList >= 4) {enList -= 4; addresses.push(2);}
+      if (enList >= 2) {enList -= 2; addresses.push(1);}
+      if (enList >= 1) {enList -= 1; addresses.push(0);}
+      return addresses.reverse()
+    }
+
+    //Encode descendant pointers for efficiency
+    encodePointer(deList) {
+      let result = 0;
+      if (typeof(deList) == 'number') {deList = [deList];}
+      if (deList === 0) {deList = [0]}
+      deList.forEach((Value) => {
+        result += 2**Value;
+      })
+      return result;
+    }
+
+    //Divide Key into four child leaves
+    Split(Key, Ignore) {
+      //console.log("SPLITTING " + Key)
+      //Initialize Variables
+      let TempKey;
+      let bigKey = Key << 2;
+      //Get Key's Layer on the tree
+      let Layer = this.getLayer(Key);
+      //Terminate if attempting to split lowest layer
+      if (Layer == this.maxlayers) {
+        throw 'Layer disabled; Split';
+      }
+      //Determine Value to redistribute
+      let Value = this.map.get(Layer).get(Key);
+      //For each of the four children nodes
+      if (Value != undefined) {
+        for (let i = 0; i < 4; i++) {
+          //Unless Child is to be ignored
+          //Distribute value to child
+          if (i != Ignore) {
+            TempKey = bigKey + i
+            this.map.get(Layer+1).set(TempKey, Value);
+          }  
+        }
+        this.map.get(Layer).set(Key, 15);
+      }
+      else {this.Populate(0, Key);  }
+      //console.log(Key + " SPLIT")
+    }
+
+    //Make Better!
+    //Merge identical leaves 
+    Merge(Key) {
+      //console.log("MERGING " + Key);
+      //If Key isn't provided, Key is root
+      if (Key == null) {Key = 1;}
+      //Get all branches referenced by Key
+      let Branches = this.getKids(Key, true)[1];
+      //If Key is an object, add to the list of branches
+      if (typeof(this.map.get(this.getLayer(Key)).get(Key)) == 'number') {Branches.push(Key);  }
+      //For each branch
+      //console.log(Branches + ' Limbs');
+      Branches.forEach((Branch) => {
+        //Get Layer of Branches' nodes
+        let Layer = this.getLayer(Branch) + 1;
+        //Get any branches referenced
+        let Desc = this.getKids(Branch, true)[1];
+        //For each branch referenced
+        Desc.forEach((Limb) => {
+            //Recurse down the tree
+            this.Merge(Limb);
+          })
+        //Get leaves of branch
+        let Kids = this.getKids(Branch, true)[0];
+        //console.log(Kids + ' Kids')
+        //If there are four
+        if (Kids.length == 4) {
+          //Shorten for easier typing
+          let baseline = this.map.get(Layer).get(Kids[0]);
+          //Check if all four values of Kid match
+          if (Kids.every(value => baseline === this.map.get(Layer).get(value) ) ) {
+            //Save values of leaves
+            let Value = this.map.get(Layer).get(Kids[0]);
+            //Remove Branch
+            //console.log(Branch + 'PURgED');
+            this.Purge(Branch);
+            if (Value !== undefined) {
+              //Replace with merged leaf 
+              this.Populate(Value,Branch);
+            }
+          }
+        }
+      })
+      //console.log(Key + " MERGE COMPLETE")
+    }
+
+    //Populate Value into Location; CoordArr Format: [Layer, X, Y]
+    Populate(Value, Key, CoordArr) {
+      //Terminate if location not provided
+      if (Key == undefined) {throw 'Invalid Key; Populate'}
+      else if (Key == false) {Key = this.Encode(CoordArr);  }
+      //console.log("POPULATING " + Key)
+      //Determine current Layer and terminate if invalid key
+      let Layer = this.getLayer(Key);
+      //Delete all descendants
+      let base = this.map.get(Layer).get(Key);
+      if (typeof(base) == 'number' && base != 0) {this.Purge(Key);  }
+      //Set base value
+      this.map.get(Layer).set(Key, Value);
+      //Repeat up the this.map
+      let raising = true; 
+      while (raising && Layer != 0) {
+        //Change Value to last two bits of the key 
+        let Value = Key % 4;
+        Key >>= 2;
+        Layer -= 1;
+        //Shorten map value for simplicity
+        let target = this.map.get(Layer).get(Key);
+        //If address leads to a branch
+        if (typeof(target) == 'number') {
+          let points = this.decodePointer(this.map.get(Layer).get(Key));
+          raising = false;
+          //If map position doesn't already have our value, add the value 
+          if (!points.includes(Value)) {
+            points.push(Value);
+            this.map.get(Layer).set(Key,this.encodePointer(points));  
+          }
+        }
+        //Else if address leads to a leaf, distribute the data
+        else if ( target != undefined) {this.Split(Key, Value);  }
+        //Else give it a pointer 
+        else {this.map.get(Layer).set(Key, this.encodePointer(Value));  } 
+      } 
+      //console.log(Key + " POPULATION COMPLETE")
+    }
+
+    //Purge all descendants of Key
+    Purge(Key) {
+      if (Key == null) {Key = 1;  }
+      //Get Layer of Key
+      let Layer = this.getLayer(Key);
+      if (this.map.get(Layer).get(Key) != undefined) {
+        //console.log("Purging " + Key);
+        //Determine Parent Address and Kid Modifier
+        let parAdd = Key >> 2;
+        let kidMod = Key % 4;
+        //Get all Children of the Key
+        let Nodes = this.getKids(Key);
+        //For each Kid (Value) returned
+        Nodes[0].forEach((Kid) => {
+          //Delete it
+          this.map.get(this.getLayer(Kid)).delete(Kid)  
+        }  )
+        //For each Parent (Array) returned
+        Nodes[1].forEach((Parent) => {
+          //Delete it
+          this.map.get(this.getLayer(Parent)).delete(Parent)  
+        }  )
+        //Delete Key location
+        this.map.get(Layer).delete(Key);
+        if (Key != 1) {
+          //Filter out Parent Reference
+          let par = this.decodePointer(this.map.get(Layer-1).get(parAdd));
+          let refpoint = this.encodePointer(par.filter((kid) => kid != kidMod));
+          this.map.get(Layer-1).set(parAdd, refpoint);
+        }
+        //console.log("Purge " + Key + ' Complete')
+      }
+    }  
+
+    getLayer(Key) {
+      //Convert Key to binary string
+      let StrKey = Key.toString(2);
+      //Get Key's Layer on the this.map
+      let Layer = (StrKey.length-1)/2;
+      //If Key is even, terminate function
+      if (StrKey.length%2 == 0) {throw "INVALID KEY; getLayer"  }
+      //Return Key's Layer on the this.map
+      return Layer  
+    }
+
+    //Return all descendants of Key, when calling provide Key(int) and Step(bool)
+    getKids(Key, Step, RemKids, RemParents, RemIndex) {
+      //Initialize variables
+      if (Key == undefined) {Key = 1  }
+      if (Step == undefined) {Step = false  }
+      //console.log("GETTING KIDS AT " + Key + " .. Stepping? " + Step);
+      let TempKey; let Kids; let YoungParents; let IndexList;
+      let Layer = this.getLayer(Key);
+      //Fill variables for recursion
+      if (RemKids != undefined) {
+        Kids = RemKids;
+        YoungParents = RemParents;
+        IndexList = RemIndex;
+      }
+      else {
+        Kids = [];
+        YoungParents = [];
+        IndexList = [];
+      }
+      //Add a layer to key
+      let bigKey = Key << 2;
+      //Shorten Location for faster typing
+      let Orig = this.map.get(Layer).get(Key);
+      //If Location is an Array, for each object in array
+      if (typeof(Orig) == 'number' && Orig != 0) {
+        Orig = this.decodePointer(Orig);
+        Orig.forEach((Address) => {
+        //Combine Current Address with Address Modifier 
+        TempKey = bigKey + Address;
+        //Shorten New location for faster typing
+        let target = this.map.get(Layer+1).get(TempKey);
+        //Debug Sponsored //Console.log
+        //console.log(TempKey);
+        //If new location is an array, mark it as a young parent
+        if (typeof(target) === 'number') {YoungParents.push(TempKey);  }
+        //Else, mark it as a child
+        else {Kids.push(TempKey);  }
+        //console.log(YoungParents);  
+      }  )  } 
+      else if (Orig == 0) {
+        for (let i = 0; i < 4; i++) {
+          TempKey = bigKey + i
+          Kids.push(TempKey);
+        }
+      }
+      //If not stepping, recurse
+      if (!Step) {
+        //For Each YoungParent
+        YoungParents.forEach((Parent) => {
+          //Remove the first value from the list and add it to the ParentIndex
+          IndexList.push(YoungParents.shift());
+          //Do all this again with the next YoungParent (Array Node)
+          //console.log('Recursing');
+          this.getKids(Parent, false, Kids, YoungParents, IndexList);  
+        }  )  
+      }
+      //If stepping, return results
+      else {
+        //console.log('KIDS AT ' + Key + " FOUND"); 
+        return [Kids, YoungParents]
+      }
+      //Return list of all Kids and list of all Parents
+      //console.log('KIDS AT ' + Key + " FOUND");
+
+      return [Kids, IndexList]  
+    }
+
+    //Return all Parents who have an immediate leaf
+    getLoadedParents(Key) {
+      if (Key === undefined) {Key = 1}
+      //Get all branches and leaves
+      let Nodes = this.getKids(Key);
+      let Kids = Nodes[0];
+      //Create unique set
+      let Parents = new Set;
+      //Check the parent of each leaf
+      Kids.forEach((Child) => {
+        Parents.add(Child >> 2)
+      })
+      //Return list of loaded parents
+      return Parents
+    }
+
+    //Return the predicted kids for a key pointer pair
+    nameKids(Key, Pointer) {
+      if (Key == undefined) {throw 'No Key Provided; nameKids'  }
+      if (Pointer == undefined) {return []  }
+      let Kids = [];
+      let blueKey = Key << 2;
+      let kidAdds = this.decodePointer(Pointer);
+      kidAdds.forEach((kid) => {
+        Kids.push(blueKey + kid)
+        //console.log(Kids)
+      })
+      return Kids
+    }
+
+    //Save map state as JSON
+    Save(Key) {
+      if (Key == undefined) {Key = 1  }
+      let SaveFile = [];
+      //Get all nodes which have leaves as direct children
+      let Branches = this.getLoadedParents(Key);
+      //If there are none, return the state of layer 0
+      if (Branches.size === 0) {return JSON.stringify([1,this.map.get(0).get(1)])}
+      //For each loaded parent
+      Branches.forEach((Parent) => {
+        let Layer = this.getLayer(Parent) + 1;
+        let KidValues = [];
+        //Get its children
+        let Nodes = this.getKids(Parent, true);
+        let Kids = [...Nodes[0], ...Nodes[1]];
+        //Properly order them
+        Kids.sort();
+        //console.log(Kids);
+        //For each kid
+        Kids.forEach((Value) => {
+          //If it's a leaf, save as leaf
+          if (typeof(this.map.get(Layer).get(Value)) == 'string') {
+            KidValues.push(this.map.get(Layer).get(Value));  
+          }
+          //If it's a branch, insert placeholder (null)
+          else if (typeof(this.map.get(Layer).get(Value)) == 'number') {
+            KidValues.push(null);
+          }
+        })
+        SaveFile.push([Parent, this.map.get(Layer - 1).get(Parent), KidValues])
+      })
+      //console.log(SaveFile);
+      return JSON.stringify(SaveFile);
+    }
+
+    //Load map state from JSON 
+    Load(Data, Key) {
+      //If data isn't provided, complain
+      if (Data == undefined || typeof(Data) != 'string') {throw 'Invalid Data; Load';  }
+      if (Key == undefined) {Key = 1}
+      //console.log('LOADING at ' + Key);
+      //Convert JSON to array
+      let DatArr = JSON.parse(Data);
+      //Catch edgecase where loading into layer 0
+      if (DatArr[0] === 1) {
+        this.Populate(DatArr[1],1);
+        this.Redraw(Key);
+        //console.log('DATA LOAD SUCCESSFUL');
+        return true
+       }
+      //For each node supplied
+      DatArr.forEach((Branch) => {
+        //If it isn't a placeholder
+        if (Branch[2] != null) {
+          //Get addresses from Parent Key and Address modifier
+          let kidKids = this.nameKids(Branch[0], Branch[1]);
+          for (let i = 0; i < kidKids.length; i++) {
+            //Fill addresses
+            this.Populate(Branch[2][i], kidKids[i]);
+          }
+        }
+      })
+      //console.log('DATA LOAD SUCCESSFUL');
+    }
+  }
+
+  //Clean up constructor variables (Make into arrays?) [Real, Editor]
+  class Player {
+    constructor (sidelength, x, y) {
+      this.sidelength = [sidelength, cw/2];
+      this.quadlength = [sidelength/2, cw/4];
+      this.x = [x, cw/2];
+      this.y = [y, ch/2];
+      this.r = [0, 0];
+      //Change in [X, Y, R]
+      this.delta = [0, 0, 0]
+      this.bb = [];
+      this.com = [];
+      this.mass = 0;
+      this.qt = new Quadtree(5);
+      this.aBoxData = new Map();
+      this.rboxData = new Map();
+      this.gridData = [];
+    }
+
+    checkCol(target) {
+      let hit = false;
+      let thisxoff = this.x[0] + this.com[0];
+      let thisyoff = this.y[0] + this.com[1];
+      let tarxoff = target.x[0] + target.com[0];
+      let taryoff = target.y[0] + target.com[1];
+      if (target.bb[0] < this.bb[1] &&
+          target.bb[1] > this.bb[0] &&
+          target.bb[2] < this.bb[3] &&
+          target.bb[3] > this.bb[2]) {
+        for (let i = 0; i < 4; i++) {
+          this.qt.corners.get(i).forEach((key) => {
+            can.fillStyle = 'red';
+            let x = this.rboxData.get(key)[i][0] + thisxoff;
+            let y = this.rboxData.get(key)[i][1] + thisyoff;   
+            let rpoints = spinPoint(x, y, tarxoff, taryoff, -1*target.r[0]);
+            let rx = rpoints[0] + tarxoff;
+            let ry = rpoints[1] + taryoff;
+            if (target.bb[0] < x &&
+                target.bb[1] > x &&
+                target.bb[2] < y &&
+                target.bb[3] > y) {
+              let val;
+              try {
+                let address = target.getHole(rx, ry);
+                let Layer = target.qt.getLayer(address);
+                val = target.qt.map.get(Layer).get(address);
+              }  catch (err) {}
+              if (typeof(val) == 'string') {
+                can.fillStyle = 'lime';
+                hit = true;
+              }
+              else {can.fillStyle = 'yellow';}
+            }
+            if (Debug) {
+              can.fillRect(x - 2, y - 2,4,4);
+            }
+          })
+        }
+        return hit
+      }
+    }
+
+    //Find position in the tree for a relative x y coordinate
+    getHole(x, y) {
+      if (x == undefined || y == undefined) {throw 'Coordinates not provided; getHole'}
+      let e; if (Edit) {e = 1} else {e = 0}
+      let xoff = this.x[e]; let yoff = this.y[e]; let ql = this.quadlength[e];
+      if (x > ql + xoff ||
+          y > ql + yoff ||
+          x < xoff - ql ||
+          y < yoff - ql) {throw 'Outside Accepted Range; getHole '}
+      //console.log("FINDING HOLE at " + (x - this.actx) + ', ' + (y - this.acty))
+      //console.log(x + "   " + y)
+      //Start at top of tree
+      let Key = 1;
+      //Initialize variable
+      let Layer = 0
+      //Set escape variable
+      let searching = true;
+      //While searching
+      while (searching) {
+        //Get descendants 1 level down
+        let Kids = this.qt.getKids(Key, true).flat();
+        //If they are a leaf
+        //console.log(Kids)
+        if (Kids.length == 0) {
+          //Terminate loop
+          searching = false;
+        }
+        else {
+          //Get Key Layer
+          Layer ++;
+          //Define scale at layer
+          let scale = 2**Layer;
+          //Define box dimensions
+          let boxsize = this.sidelength[e]/scale;
+          //Calculate which of the four nodes the point falls into
+          let mx = Math.floor((x - xoff)/boxsize);
+          let my = Math.floor((y - yoff)/boxsize);
+          //Convert those coordinates back into a key
+          Key = this.qt.Encode([Layer, mx, my]);
+          //Repeat
+        }
+      }
+      //Return the final Key
+      //console.log("HOLE ACQUIRED, " + Key)
+      return Key
+    }
+
+    Rotate(radian, increment) {
+      this.rboxData.clear();
+      let e; if (Edit) {e = 1} else {e = 0}
+      if (increment) {this.r[e] = Number((this.r[e]+radian).toFixed(2))}
+      else {this.r[e] = radian}
+      this.aBoxData.forEach((box, key) => {
+        let newbox = [];
+        for (let i = 0; i < 4; i++) {
+          newbox.push(spinPoint(box[i][0], box[i][1], this.com[0], this.com[1], this.r[e]));
+        }
+        newbox.push(box[4]);
+        this.rboxData.set(key, newbox);
+      })
+      this.calcBB();
+      return this.r[e];
+    }
+
+    //Calculate the object's Center of Mass, currently all blocks weigh equal scaled by layer
+    calcCom(Nodes) {
+      let e; if (Edit) {e = 1} else {e = 0}
+      if (typeof(this.qt.map.get(0).get(1)) == 'string') {
+        this.com = [0,0];
+        this.mass = 64;
+        return [0,0];
+      }
+      let sl = this.sidelength[e];
+      let weight = 64;
+      let xmass = 0;
+      let ymass = 0;
+      let totalmass = 0;
+      Nodes[0].forEach((key) => {
+        let CoordArr = this.qt.Decode(key);
+        let value = this.qt.map.get(CoordArr[0]).get(key);
+        if (value != undefined) {
+          let boxsize = sl/(2**CoordArr[0]);
+          let relweight = weight/(4**CoordArr[0]);
+          xmass += (CoordArr[1] + .5) * boxsize * relweight;
+          ymass += (CoordArr[2] + .5) * boxsize * relweight;
+          totalmass += relweight;
+        }
+      })
+      this.mass = totalmass;
+      let xcom = xmass/totalmass;
+      let ycom = ymass/totalmass;
+      this.com = [xcom, ycom]
+      return [xcom, ycom]
+    }
+
+    //Get updated coordinate positions to draw boxes
+    calcBoxes(Nodes) {
+      let e; if (Edit) {e = 1} else {e = 0}
+      if (typeof(this.qt.map.get(0).get(1)) == 'string') {
+        let ql = this.quadlength[e];
+        this.aBoxData.clear;
+        this.aBoxData.set(1, [
+          [-1*ql, -1*ql],
+          [ql, -1*ql],
+          [ql, ql],
+          [-1*ql, ql],
+          this.qt.map.get(0).get(1)
+        ]);
+        return
+      }
+      let sl = this.sidelength[e];
+      this.aBoxData.clear()
+      Nodes[0].forEach((Kid) => {
+        let CoordArr = this.qt.Decode(Kid);
+        let boxsize = sl/(2**CoordArr[0]);
+        let color = this.qt.map.get(CoordArr[0]).get(Kid);
+        if (color == undefined) {color = 'white';}
+          this.aBoxData.set(Kid, [
+          [CoordArr[1]*boxsize, CoordArr[2]*boxsize],
+          [CoordArr[1]*boxsize + boxsize, CoordArr[2]*boxsize],
+          [CoordArr[1]*boxsize + boxsize, CoordArr[2]*boxsize + boxsize],
+          [CoordArr[1]*boxsize, CoordArr[2]*boxsize + boxsize],
+          color
+        ]);
+      });
+    }
+
+    //Change to calculate based on this.qt.corners
+    //Calculate the axis aligned bounding box
+    calcBB() {
+      let e; if (Edit) {e = 1} else {e = 0}
+      let ymin = 0; let ymax = 0;
+      let xmin = 0; let xmax = 0;
+      this.rboxData.forEach((box) => {
+        for (let i = 0; i < 4; i++) {
+          let x = box[i][0];
+          let y = box[i][1]
+          if (y < ymin) {ymin = y}
+          else if (y > ymax) {ymax = y}
+          if (x < xmin) {xmin = x}
+          else if (x > xmax) {xmax = x}
+        }
+      })
+      let x; let y;
+      if (Edit) {x = this.x[e]; y = this.y[e]}
+      else {x = this.x[e] + this.com[0]; y = this.y[e] + this.com[1];}
+      this.bb = [xmin + x, xmax + x, ymin + y, ymax + y];
+    }
+
+    //Recalculate grid positions
+    calcGrids(Nodes) {
+      //console.log(Nodes)
+      let e; if (Edit) {e = 1} else {e = 0}
+      let ql = this.quadlength[e]
+      let gridC = [];
+      Nodes[1].forEach((Branch) => {
+        let CoordArr = this.qt.Decode(Branch);
+        let boxsize = ql/(2**CoordArr[0]);
+        gridC.push([CoordArr[1]*boxsize*2, CoordArr[2]*boxsize*2, boxsize]);
+      })
+      this.gridData = gridC;
+  }
+
+    //Update fields reliant on qt
+    Update() {
+      let e; if (Edit) {e = 1} else {e = 0}
+      let Kids = this.qt.getKids();
+      this.calcBoxes(Kids);
+      if (Grid) {this.calcGrids(Kids)}
+      this.calcCom(Kids);
+      this.Rotate(this.r[e]);
+    }
+
+    //Draw boxes using cached Recalc Data
+    Draw() {
+      let e; if (Edit) {e = 1} else {e = 0}
+      let x = this.x[e]; let y = this.y[e];
+      if (this.rboxData.has(1)) {
+        let value = this.rboxData.get(1);
+        can.fillStyle = value[4];
+        can.strokeStyle = value[4];
+        can.beginPath();
+        can.moveTo(x + value[0][0], y + value[0][1]);
+        can.lineTo(x + value[1][0], y + value[1][1]);
+        can.lineTo(x + value[2][0], y + value[2][1]);
+        can.lineTo(x + value[3][0], y + value[3][1]);
+        can.closePath();
+        can.fill();
+        can.stroke();
+      }
+      else {
+        this.rboxData.forEach((value) => {
+          can.fillStyle = value[4];
+          can.strokeStyle = value[4];
+          let offsetx = x + this.com[0];
+          let offsety = y + this.com[1];
+          can.beginPath();
+          can.moveTo(offsetx + value[0][0], offsety + value[0][1]);
+          can.lineTo(offsetx + value[1][0], offsety + value[1][1]);
+          can.lineTo(offsetx + value[2][0], offsety + value[2][1]);
+          can.lineTo(offsetx + value[3][0], offsety + value[3][1]);
+          can.closePath();
+          can.fill();
+          can.stroke();
+        });
+      }
+    }
+
+    DrawBB() {
+      let e; if (Edit) {e = 1} else {e = 0}
+      let x = this.x[e] + this.com[0]; let y = this.y[e] + this.com[1];
+      can.strokeStyle = 'black';
+      //Draw box around qt
+      can.beginPath();
+      can.moveTo(this.bb[0], this.bb[2]);
+      can.lineTo(this.bb[1], this.bb[2]);
+      can.lineTo(this.bb[1], this.bb[3]);
+      can.lineTo(this.bb[0], this.bb[3]);
+      can.closePath();
+      can.stroke();
+    }
+
+    //Draw grid
+    Grid() {
+      let e; if (Edit) {e = 1} else {e = 0}
+      let x = this.x[e]; let y = this.y[e];
+      let ql = this.quadlength[e];
+      can.strokeStyle = 'black';
+      //Draw box around qt
+      can.beginPath();
+      can.moveTo(x - ql, y - ql);
+      can.lineTo(x + ql, y - ql);
+      can.lineTo(x + ql, y + ql);
+      can.lineTo(x - ql, y + ql);
+      can.closePath();
+      can.stroke();
+      //If the map has children draw initial + sign 
+      if (typeof(this.qt.map.get(0).get(1)) == 'number') {
+        can.beginPath();
+        can.moveTo(x, y + ql);
+        can.lineTo(x, y - ql);
+        can.moveTo(x + ql, y);
+        can.lineTo(x - ql, y);
+        can.stroke();
+      }
+      this.gridData.forEach((grid) => {
+        let length = grid[2] * 2
+        can.beginPath();
+        can.moveTo(x + grid[0] + grid[2], y + grid[1]);
+        can.lineTo(x + grid[0] + grid[2], y + grid[1] + length);
+        can.moveTo(x + grid[0], y + grid[1] + grid[2]);
+        can.lineTo(x + grid[0] + length, y + grid[1] + grid[2]);
+        can.stroke();
+      })
+    }
+
+    //Run all render functions
+    Render() {
+      let e; if (Edit) {e = 1} else {e = 0}
+      let x = this.x[e]; let y = this.y[e];
+      this.Draw();
+      if (Grid) {this.Grid();}
+      can.fillStyle = 'red';
+    can.fillRect(this.com[0] + x - 5, this.com[1] + y - 5, 10,10);
+      if (!Edit) {this.DrawBB()}
+      return true
+    }
+
+    //Scale render points
+    Resize(newsize, newdepth) {
+      let e; if (Edit) {e = 1} else {e = 0}
+      if (newsize != undefined) {
+        this.sidelength[e] = newsize;
+        this.quadlength[e] = newsize/2;
+      }
+      if (newdepth != undefined) {
+        this.qt.changeMaxDepth(newdepth);
+      }
+      this.Update();
+    }
+
+    applyForce(force, point, orientation) {
+      let vforce = vectorForce(force, orientation);
+      let torque = cross(point, vforce);
+      this.delta[0] += vforce[0]/this.mass;
+      this.delta[1] += vforce[1]/this.mass;
+      if (torque != 0) {
+        this.delta[2] = this.delta[2] + torque/(this.mass*30000);
+      }
+    }
+
+    step() {
+      this.x[0] += this.delta[0]
+      this.y[0] += this.delta[1]
+      this.r[0] += this.delta[2]
+      while (this.r[0] > 2) {this.r[0] -= 2}
+      while (this.r[0] < -2) {this.r[0] += 2}
+      this.delta = [0, 0, 0]
+    }
+
+  }
+
+  const p = new Player(150,250,250);
+
+  const world = new Player(cw,cw/2,ch/2)
+  world.qt.Load('[[7,14,[null,null,"green"]],[21,10,["blue","blue"]],[23,14,["blue","yellow","yellow"]],[29,15,["yellow","green","green","green"]],[30,14,["green","green","green"]]]')
+  world.Update();
+  world.qt.updateCorners();
+
+  var ObjList = [world, p];
+
+  let current  = p;
+
+  //Button Functions
+  function Reset() {
+    //console.log("HARD RESET.")
+    //Clear Quadtree
+    current.qt.Purge(1);
+    current.x[0] = ch/2;
+    current.y[0] = ch/2;
+    current.r[0] = 0;
+    //Clear canvas
+    current.Update();
+    current.Render();
+  }
+
+  function ToggleEditor() {
+    if (Edit == false) {
+      Edit = true; Grid = true;
+      current.Rotate(p.r[1]);
+    }
+    else {
+      current.qt.Merge(1)
+      current.qt.updateCorners();
+      Edit = false; Grid = false;
+    }
+    p.Update();
+    world.Update();
+    //Toggle Controls  
+  }
+
+  function LoadFromUser() {
+    let data = document.getElementById('LoadData').value;
+    current.qt.Load(data);
+    current.Update();
+    current.Render();
+  }
+
+  function SaveToUser() {
+    current.qt.Merge();
+    current.Update();
+    current.Render();
+    document.getElementById('SaveData').innerHTML = current.qt.Save()
+  }
+
+  //Mouse Interaction
+  //Find mouse position on QT, then execute requested code 
+  function mousePop(x, y, mode, Color) {
+    if (Edit) {
+      let Key = current.getHole(x, y);
+      switch (mode) {
+        case 0:
+          current.qt.Populate(Color, Key);
+          break;
+        case 1:
+          current.qt.Purge(Key);
+          break;
+        case 2:
+          current.qt.Split(Key);
+          break;
+        case 3:
+          current.qt.Merge(Key >> 2);
+          break;
+      }
+      current.Update();
+      current.Render();
+    }
+  }
+
+  onmouseup = () => {
+    setTimeout(() => {
+      if (document.getElementById('Place').checked) {CurMode = 0;  }
+      else if (document.getElementById('Delete').checked) {CurMode = 1;  }
+      else if (document.getElementById('Split').checked) {CurMode = 2;  }
+      else if (document.getElementById('Merge').checked) {CurMode = 3;  }
+    }, 100 )
+  }
+  onmousedown = (event) => {
+    let e;
+    if (Edit) {e = 1}
+    else {e = 0}
+    if (event.x - bounding.left <= current.quadlength[e] + current.x[e] &&
+        event.y - bounding.top <= current.quadlength[e] + current.y[e] &&
+        event.x > current.x[e] - current.quadlength[e] &&
+        event.y > current.y[e] - current.quadlength[e]) {
+      cc.color = document.getElementById('Color').value;
+      if (cc.color == '') {cc.color = 'grey'}
+      mousePop(event.x - bounding.left, event.y - bounding.top, CurMode, cc.color)  
+    }  
+  }
+
+  let right; let left; let up; let down;
+
+  onkeyup = (event) => {
+    switch (event.key) {
+      case 'ArrowRight':
+        right = false;
+        break;
+      case 'ArrowLeft':
+        left = false;
+        break;
+      case 'ArrowUp':
+        up = false;
+        break;
+      case 'ArrowDown':
+        down = false;
+        break;
+    }
+  };
+  onkeydown = (event) => {
+    switch (event.key) {
+      case 'ArrowRight':
+        right = true;
+        break;
+      case 'ArrowLeft':
+        left = true;
+        break;
+      case 'ArrowUp':
+        up = true;
+        break;
+      case 'ArrowDown':
+        down = true;
+        break;
+    }
+  }
+
+
+  function RenderWorld() {
+    can.clearRect(0,0,cw,ch);
+    ObjList.forEach((object) => {
+      object.Rotate(object.r[0]);
+      object.Render();
+    })
+  }
+
+  setInterval(function () {
+    let e; if (Edit) {e = 1} else {e = 0}
+    if (!Edit) {
+      let thrust = 100;
+      if (right) {
+        try {
+          current.applyForce(thrust, current.rboxData.get(1)[0], current.r[0])
+          current.applyForce(-thrust, current.rboxData.get(1)[2], current.r[0])
+        }
+        catch(error) {
+          current.Rotate(.01, true)
+        }
+      }
+      else if (left) {
+        try {
+          current.applyForce(-thrust, current.rboxData.get(1)[0], current.r[0])
+          current.applyForce(thrust, current.rboxData.get(1)[2], current.r[0])
+        }
+        catch(error) {
+          current.Rotate(-.01, true)
+        }
+      }
+      if (down) {
+        try {
+        current.applyForce(-thrust, current.rboxData.get(1)[1], current.r[0])
+        current.applyForce(-thrust, current.rboxData.get(1)[2], current.r[0])
+        }
+        catch(error) {
+          current.applyForce(-thrust, [0,0], current.r[0])
+        }
+      }
+      else if (up) {
+        try {
+          current.applyForce(thrust, current.rboxData.get(1)[1], current.r[0])
+          current.applyForce(thrust, current.rboxData.get(1)[2], current.r[0])
+        }  
+        catch(error) {
+          current.applyForce(thrust, [0,0], current.r[0])
+        }
+      }
+      current.step();
+      RenderWorld();
+      let colliding = p.checkCol(world) | world.checkCol(p);
+      if (colliding == true) {
+        document.getElementById('collide').innerHTML = 'True'
+      }
+      else {
+        document.getElementById('collide').innerHTML = 'False'
+      }
+    }
+    else {
+      can.clearRect(0,0,cw,ch);
+      current.Render();
+    }
+  }, 1000/60);
+  
+</script>
+
+<br>
+<input type="radio" id="Place" name="Tools" value="Place" checked />
+<label for="Place">Place</label>
+<input type="radio" id="Delete" name="Tools" value="Delete" />
+<label for="Delete">Delete</label>
+<input type="radio" id="Split" name="Tools" value="Split" />
+<label for="Split">Split</label>
+<input type="radio" id="Merge" name="Tools" value="Merge" />
+<label for="Merge">Merge</label>
+<br>  <br>
+  
+<input type="text" id="Color" placeholder="Grey">
+<br>  <br>
+
+<span>Colliding: </span>
+<span id = 'collide'>False</span>
+<br>  <br>
+  
+<input type = "button" onclick = "ToggleEditor()" value = "Toggle Editor">
+<input type = "button" onclick = "Reset()" value = "Reset">
+<br>  <br>
+  
+<input type="text" id="LoadData" placeholder="Load Data">
+<input type = "button" onclick = "SaveToUser()" value = "Save">  
+<input type = "button" onclick = "LoadFromUser()" value = "Load">
+<br>  <br>
+<p id='SaveData'></p>
+  
+
+</body>
+
+</html>
